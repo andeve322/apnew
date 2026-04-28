@@ -119,8 +119,8 @@ export const CopilotModal = ({
       sanitizedTrigger.type = FlowTriggerType.EMPTY;
       sanitizedTrigger.settings = {};
       sanitizedTrigger.displayName = sanitizedTrigger.displayName || 'Trigger';
-      sanitizedTrigger.settings = {};
-      sanitizedTrigger.valid = false;
+      sanitizedTrigger.sampleData = {};
+      sanitizedTrigger.valid = true;
     } else {
       sanitizedTrigger.valid = true;
     }

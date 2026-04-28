@@ -1,14 +1,13 @@
 import { safeHttp } from '@activepieces/server-utils'
 import { isNil } from '@activepieces/shared'
-import axios from 'axios'
 import { FastifyBaseLogger } from 'fastify'
 import { pieceMetadataService } from '../pieces/metadata/piece-metadata-service'
 
 export const chatbotService = {
     async chat({ message, history, log }: { message: string, history: any[], log: FastifyBaseLogger }) {
-        const groqApiKey = process.env.GROQ_API_KEY
-        if (isNil(groqApiKey)) {
-            throw new Error('GROQ_API_KEY is not configured in the environment')
+        const apiKey = process.env.CHATBOT_API_KEY || process.env.GROQ_API_KEY
+        if (isNil(apiKey)) {
+            throw new Error('CHATBOT_API_KEY or GROQ_API_KEY is not configured in the environment')
         }
 
         // Fetch piece list
@@ -191,29 +190,24 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
             { role: 'user', content: message },
         ]
 
-        const provider = process.env.CHATBOT_PROVIDER || 'groq'
-        const model = process.env.CHATBOT_MODEL || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'llama3.1:latest')
+        const baseUrl = process.env.CHATBOT_BASE_URL || 'https://api.groq.com/openai/v1'
+        const model = process.env.CHATBOT_MODEL || 'llama-3.3-70b-versatile'
 
-        const callLlm = async (currentProvider: string, currentModel: string) => {
-            const isOllama = currentProvider === 'ollama'
-            const baseUrl = isOllama 
-                ? 'http://127.0.0.1:11434/v1/chat/completions' 
-                : 'https://api.groq.com/openai/v1/chat/completions'
-
+        const callLlm = async (modelName: string) => {
             const headers: Record<string, string> = {
                 'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
             }
 
-            if (!isOllama) {
-                headers['Authorization'] = `Bearer ${groqApiKey}`
-            }
+            const cleanBaseUrl = baseUrl.replace(/\/$/, '')
+            const url = cleanBaseUrl.endsWith('/chat/completions') 
+                ? cleanBaseUrl 
+                : `${cleanBaseUrl}/chat/completions`
 
-            const client = isOllama ? axios : safeHttp.axios
-
-            return client.post(
-                baseUrl,
+            return safeHttp.axios.post(
+                url,
                 {
-                    model: currentModel,
+                    model: modelName,
                     messages,
                     temperature: 0.3,
                 },
@@ -222,24 +216,8 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
         }
 
         try {
-            let response
-            try {
-                log.info({ provider, model }, 'Attempting to call primary LLM provider')
-                response = await callLlm(provider, model)
-            }
-            catch (error: any) {
-                const groqError = error?.response?.data || error.message
-                log.error({ error: groqError }, 'Groq API failed')
-                
-                if (provider === 'groq') {
-                    const fallbackModel = process.env.CHATBOT_MODEL || 'gemma4:e4b'
-                    log.warn({ fallbackModel }, 'Falling back to Ollama...')
-                    response = await callLlm('ollama', fallbackModel)
-                }
-                else {
-                    throw error
-                }
-            }
+            log.info({ baseUrl, model }, 'Attempting to call LLM provider')
+            const response = await callLlm(model)
 
             let reply = response.data.choices[0].message.content
             let flowJson = null
@@ -376,6 +354,7 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     // 2. Type-specific logic
                     if (step.type === 'EMPTY') {
                         step.settings = {}
+                        step.sampleData = {}
                     }
 
                     if (step.type === 'LOOP_ON_ITEMS') {

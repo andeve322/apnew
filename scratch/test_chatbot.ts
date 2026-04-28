@@ -1,5 +1,5 @@
 
-import { chatbotService } from './packages/server/api/src/app/chatbot/chatbot.service.ts'
+import { chatbotService } from '../packages/server/api/src/app/chatbot/chatbot.service'
 import { FastifyBaseLogger } from 'fastify'
 
 const mockLog = {
