@@ -17,51 +17,29 @@ export const chatbotService = {
 
         // Core pieces that are ALWAYS useful for any workflow
         const corePiecesNames = [
-            'gmail', 'google-sheets', 'schedule', 'http', 'ai', 'mcp', 'openai', 
-            'google-gemini', 'claude', 'approval', 'utility', 'delay', 'crypto', 
-            'storage', 'data-mapper', 'connections', 'csv'
+            'gmail', 'google-sheets', 'schedule', 'http', 'ai', 'approval', 'utility', 'delay', 'ingv'
         ]
 
         const getRelevantPieces = (prompt: string, summary: any[]) => {
             const msg = prompt.toLowerCase()
-            // Extract potential keywords from the prompt (words > 3 chars)
             const keywords = msg.split(/\W+/).filter(w => w.length > 3)
             
             const scored = summary.map(p => {
                 let score = 0
                 const name = p.name.replace('@activepieces/piece-', '').toLowerCase()
                 const displayName = p.displayName.toLowerCase()
-                const categories = (p.categories || []).map((c: string) => c.toLowerCase())
-
-                // 1. Core Priority
                 if (corePiecesNames.includes(name)) score += 100
-
-                // 2. Exact Match in Name or Display Name
                 if (msg.includes(name) || msg.includes(displayName)) score += 50
-                
-                // 3. Partial/Keyword Match
                 for (const keyword of keywords) {
                     if (name.includes(keyword) || displayName.includes(keyword)) score += 20
                 }
-
-                // 4. Category Intelligence
-                if (msg.includes('social') || msg.includes('chat') || msg.includes('messaggio')) {
-                    if (categories.includes('communication') || categories.includes('social media')) score += 15
-                }
-                if (msg.includes('file') || msg.includes('cartella') || msg.includes('drive')) {
-                    if (categories.includes('content management') || categories.includes('file management')) score += 15
-                }
-                if (msg.includes('pagamento') || msg.includes('soldi') || msg.includes('fattura')) {
-                    if (categories.includes('payment processing') || categories.includes('accounting')) score += 15
-                }
-
                 return { piece: p, score }
             })
 
             return scored
                 .filter(s => s.score > 0)
                 .sort((a, b) => b.score - a.score)
-                .slice(0, 45) // Take top 45 most relevant pieces
+                .slice(0, 10) // TOP 10 ONLY
                 .map(s => s.piece)
         }
 
@@ -70,60 +48,29 @@ export const chatbotService = {
         const fullPieces = await Promise.all(
             selectedPieces.map(async (p) => {
                 try {
-                    const metadata = await pieceMetadataService(log).get({
+                    return await pieceMetadataService(log).get({
                         name: p.name,
                         version: p.version,
                     });
-                    return metadata;
                 } catch (e) {
-                    log.error(`[ChatbotService] Failed to fetch metadata for piece ${p.name}: ${e}`);
                     return undefined;
                 }
             })
         );
 
         const simplifiedPieces = fullPieces.filter(p => !isNil(p)).map(p => {
-            log.info(`[ChatbotService] RAG selected: ${p!.name}`);
-            const mapInputProps = (items: Record<string, any>) => {
+            const mapProps = (props: Record<string, any>) => {
                 const result: Record<string, any> = {}
-                for (const [key, item] of Object.entries(items)) {
-                    const entries = Object.entries(item.props || {})
-                    result[key] = {
-                        description: item.description,
-                        displayName: item.displayName,
-                        props: Object.fromEntries(entries.map(([k, prop]: [string, any]) => [
-                            k,
-                            {
-                                displayName: prop.displayName,
-                                description: prop.description,
-                                type: prop.type,
-                                required: !!prop.required,
-                            },
-                        ])),
-                    }
-                }
-                return result
-            }
-
-            const mapOutputFields = (items: Record<string, any>) => {
-                const result: Record<string, string[]> = {}
-                for (const [key, item] of Object.entries(items)) {
-                    const sample = (item as any).sampleData
-                    if (sample && typeof sample === 'object' && !Array.isArray(sample)) {
-                        result[key] = Object.keys(sample)
-                    }
+                for (const [key, prop] of Object.entries(props)) {
+                    result[key] = { type: prop.type, required: !!prop.required }
                 }
                 return result
             }
 
             return {
                 name: p!.name,
-                displayName: p!.displayName,
-                description: p!.description,
-                version: p!.version,
-                actions: mapInputProps(p!.actions),
-                triggers: mapInputProps(p!.triggers),
-                outputs: mapOutputFields(p!.actions),
+                actions: Object.fromEntries(Object.entries(p!.actions).slice(0, 12).map(([k, v]) => [k, { props: mapProps(v.props) }])),
+                triggers: Object.fromEntries(Object.entries(p!.triggers).slice(0, 12).map(([k, v]) => [k, { props: mapProps(v.props) }])),
             }
         })
 
@@ -431,8 +378,13 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     const fixMappings = (obj: any): any => {
                         if (isNil(obj)) return obj
                         if (typeof obj === 'string') {
-                            // Fix hallucinated mappings: {{steps.xxx.output.field}} or {{steps.xxx.field}} -> {{xxx.field}}
-                            return obj.replace(/\{\{\s*(?:steps\.)?([\w_]+)(?:\.output)?\.([\w_.]+)\s*\}\}/g, '{{$1.$2}}')
+                            // Robust fix for hallucinated mappings: 
+                            // Handles {{steps.xxx.output.field}}, {{xxx.output}}, {{trigger.località}}, etc.
+                            // 1. Remove 'steps.' prefix
+                            let fixed = obj.replace(/\{\{\s*steps\./g, '{{')
+                            // 2. Remove '.output' if it's followed by a dot or the end of the mapping
+                            fixed = fixed.replace(/\.output(\.|\s*\}\})/g, '$1')
+                            return fixed
                         }
                         if (Array.isArray(obj)) {
                             return obj.map(item => fixMappings(item))
@@ -440,7 +392,13 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                         if (typeof obj === 'object') {
                             const newObj: any = {}
                             for (const k in obj) {
-                                newObj[k] = fixMappings(obj[k])
+                                // AI MISTAKE: agentTools/tools must ALWAYS be an array
+                                if ((k === 'agentTools' || k === 'tools') && obj[k] && !Array.isArray(obj[k])) {
+                                    log.info({ key: k }, '[ChatbotService#fixMappings] Coercing tool to array')
+                                    newObj['agentTools'] = [fixMappings(obj[k])]
+                                } else {
+                                    newObj[k] = fixMappings(obj[k])
+                                }
                             }
                             return newObj
                         }
@@ -490,7 +448,7 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     }
 
                     if (step.type === 'BRANCH') {
-                        // AI MISTAKE: sometimes puts onTrueNextAction/onFalseNextAction inside settings. Move them out.
+                        // AI MISTAKE 1: sometimes puts onTrueNextAction/onFalseNextAction inside settings. Move them out.
                         if (step.settings?.onTrueNextAction) {
                             step.onTrueNextAction = step.settings.onTrueNextAction
                             delete step.settings.onTrueNextAction
@@ -498,6 +456,21 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                         if (step.settings?.onFalseNextAction) {
                             step.onFalseNextAction = step.settings.onFalseNextAction
                             delete step.settings.onFalseNextAction
+                        }
+                        // Ensure onFalseNextAction exists even if null to satisfy schema
+                        if (isNil(step.onFalseNextAction)) {
+                            step.onFalseNextAction = null
+                        }
+                        if (isNil(step.onTrueNextAction)) {
+                            step.onTrueNextAction = null
+                        }
+
+                        // AI MISTAKE 2: Conditions must be an array of arrays (AND of ORs)
+                        if (step.settings?.conditions && Array.isArray(step.settings.conditions)) {
+                            if (step.settings.conditions.length > 0 && !Array.isArray(step.settings.conditions[0])) {
+                                log.info({ stepName: step.name }, '[ChatbotService#fixVersions] Wrapping BRANCH conditions in double array')
+                                step.settings.conditions = [step.settings.conditions]
+                            }
                         }
                         // BRANCH must have conditions in settings
                         if (isNil(step.settings.conditions)) {
@@ -507,20 +480,55 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
 
                     const isPieceStep = step.type === 'PIECE' || step.type === 'PIECE_TRIGGER'
                     if (isPieceStep) {
-                        // Ensure input and propertySettings exist for pieces
+                        // Ensure input exists
                         if (isNil(step.settings.input)) step.settings.input = {}
                         if (isNil(step.settings.propertySettings)) step.settings.propertySettings = {}
 
-                        // Ensure pieceVersion is NEVER undefined to prevent frontend crash
-                        step.settings.pieceVersion = step.settings.pieceVersion || '0.0.1'
-                        
                         const pieceName = step.settings.pieceName
                         if (pieceName) {
-                            const normalizedName = pieceName.replace('@activepieces/piece-', '')
-                            const actualPiece = simplifiedPieces.find(
+                            const normalizedName = pieceName.replace('@activepieces/piece-', '').toLowerCase()
+                            // Search in FULL summary, not just RAG context
+                            const actualPiece = piecesSummary.find(
                                 (p) =>
-                                    p.name === pieceName ||
-                                    p.name === `@activepieces/piece-${normalizedName}` ||
+                                    p.name.toLowerCase() === pieceName.toLowerCase() ||
+                                    p.name.toLowerCase() === `@activepieces/piece-${normalizedName}` ||
+                                    p.name.replace('@activepieces/piece-', '').toLowerCase() === normalizedName,
+                            );
+                            if (actualPiece) {
+                                log.info(
+                                    { pieceName, actualName: actualPiece.name, version: actualPiece.version },
+                                    '[ChatbotService#fixVersions] Piece found in full DB',
+                                );
+                                step.settings.pieceName = actualPiece.name;
+                                step.settings.pieceVersion = actualPiece.version || step.settings.pieceVersion;
+
+                                // Fetch full metadata if needed for Gmail fixes or others
+                                const fullMetadata = await pieceMetadataService(log).get({
+                                    name: actualPiece.name,
+                                    version: actualPiece.version,
+                                }).catch(() => null);
+
+                                if (fullMetadata) {
+                                    // Gmail coercion logic
+                                    const isGmail = actualPiece.name === '@activepieces/piece-gmail' || actualPiece.name === 'gmail';
+                                    if (isGmail) {
+                                        const arrayFields = ['receiver', 'cc', 'bcc', 'reply_to'];
+                                        arrayFields.forEach((field) => {
+                                            const value = step.settings.input[field];
+                                            if (value && typeof value === 'string') {
+                                                log.info({ field, value }, '[ChatbotService#fixVersions] Coercing Gmail field to array');
+                                                let cleaned = value;
+                                                if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+                                                    cleaned = cleaned.substring(1, cleaned.length - 1).replace(/['"]/g, '').trim();
+                                                }
+                                                step.settings.input[field] = cleaned.includes('{{') ? [cleaned] : cleaned.split(',').map((e: string) => e.trim()).filter((e: string) => e.length > 0);
+                                            }
+                                        });
+                                    }
+                                }
+                            }
+                        }
+tivepieces/piece-${normalizedName}` ||
                                     p.name.replace('@activepieces/piece-', '') ===
                                         normalizedName,
                             );

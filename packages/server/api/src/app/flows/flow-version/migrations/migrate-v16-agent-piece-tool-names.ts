@@ -38,6 +38,10 @@ export const migrateV16AgentPieceToolNames: Migration = {
             }
 
             const tools = (step.settings.input?.[AgentPieceProps.AGENT_TOOLS] as AgentToolInput[] | undefined) ?? []
+            
+            if (!Array.isArray(tools)) {
+                return step
+            }
 
             const newTools = tools.map((tool) => {
                 if (tool.type === AgentToolType.PIECE && tool.pieceMetadata?.pieceName != null && tool.pieceMetadata?.actionName != null) {
