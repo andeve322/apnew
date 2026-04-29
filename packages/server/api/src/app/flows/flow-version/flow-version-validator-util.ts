@@ -107,7 +107,7 @@ export const flowVersionValidationUtil = (log: FastifyBaseLogger) => ({
             case FlowOperationType.UPDATE_TRIGGER:
                 switch (clonedRequest.request.type) {
                     case FlowTriggerType.EMPTY:
-                        clonedRequest.request.valid = false
+                        clonedRequest.request.valid = true
                         break
                     case FlowTriggerType.PIECE: {
                         clonedRequest.request.settings.pieceVersion = flowPieceUtil.getExactVersion(clonedRequest.request.settings.pieceVersion)

@@ -21,12 +21,14 @@ const TestStepContainer = React.memo(
     flowId,
     projectId,
   }: TestStepContainerProps) => {
+    const showTriggerTest =
+      type === FlowTriggerType.PIECE || type === FlowTriggerType.EMPTY;
     return (
       <div className="flex flex-col gap-3 p-4 pb-10">
         <div className="text-md font-semibold ">
           {t('Generate Sample Data')}
         </div>
-        {type === FlowTriggerType.PIECE ? (
+        {showTriggerTest ? (
           <TestTriggerSection
             flowId={flowId}
             isSaving={isSaving}

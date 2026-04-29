@@ -1,5 +1,5 @@
 import { safeHttp } from '@activepieces/server-utils'
-import { isNil } from '@activepieces/shared'
+import { apId, isNil } from '@activepieces/shared'
 import { FastifyBaseLogger } from 'fastify'
 import { pieceMetadataService } from '../pieces/metadata/piece-metadata-service'
 
@@ -15,24 +15,75 @@ export const chatbotService = {
             includeHidden: false,
         })
 
-        // Optimized: Fetch only the most relevant pieces or a smaller subset to avoid timeouts
-        const relevantPieceNames = ['schedule', 'gmail', 'smtp', 'ingv', 'weather', 'http', 'discord', 'slack', 'google-sheets', 'google-calendar', 'store', 'ai', 'mcp', 'openai', 'google-gemini', 'claude', 'groq', 'mistral-ai', 'anthropic', 'perplexity-ai', 'google-search', 'tavily', 'brave-search']
+        // Core pieces that are ALWAYS useful for any workflow
+        const corePiecesNames = [
+            'gmail', 'google-sheets', 'schedule', 'http', 'ai', 'mcp', 'openai', 
+            'google-gemini', 'claude', 'approval', 'utility', 'delay', 'crypto', 
+            'storage', 'data-mapper', 'connections', 'csv'
+        ]
+
+        const getRelevantPieces = (prompt: string, summary: any[]) => {
+            const msg = prompt.toLowerCase()
+            // Extract potential keywords from the prompt (words > 3 chars)
+            const keywords = msg.split(/\W+/).filter(w => w.length > 3)
+            
+            const scored = summary.map(p => {
+                let score = 0
+                const name = p.name.replace('@activepieces/piece-', '').toLowerCase()
+                const displayName = p.displayName.toLowerCase()
+                const categories = (p.categories || []).map((c: string) => c.toLowerCase())
+
+                // 1. Core Priority
+                if (corePiecesNames.includes(name)) score += 100
+
+                // 2. Exact Match in Name or Display Name
+                if (msg.includes(name) || msg.includes(displayName)) score += 50
+                
+                // 3. Partial/Keyword Match
+                for (const keyword of keywords) {
+                    if (name.includes(keyword) || displayName.includes(keyword)) score += 20
+                }
+
+                // 4. Category Intelligence
+                if (msg.includes('social') || msg.includes('chat') || msg.includes('messaggio')) {
+                    if (categories.includes('communication') || categories.includes('social media')) score += 15
+                }
+                if (msg.includes('file') || msg.includes('cartella') || msg.includes('drive')) {
+                    if (categories.includes('content management') || categories.includes('file management')) score += 15
+                }
+                if (msg.includes('pagamento') || msg.includes('soldi') || msg.includes('fattura')) {
+                    if (categories.includes('payment processing') || categories.includes('accounting')) score += 15
+                }
+
+                return { piece: p, score }
+            })
+
+            return scored
+                .filter(s => s.score > 0)
+                .sort((a, b) => b.score - a.score)
+                .slice(0, 45) // Take top 45 most relevant pieces
+                .map(s => s.piece)
+        }
+
+        const selectedPieces = getRelevantPieces(message, piecesSummary)
+
         const fullPieces = await Promise.all(
-            piecesSummary
-                .filter(p => relevantPieceNames.includes(p.name.replace('@activepieces/piece-', '')) || relevantPieceNames.includes(p.name))
-                .slice(0, 20)
-                .map(async (p) => {
-                    try {
-                        return await pieceMetadataService(log).get({ name: p.name, version: p.version })
-                    }
-                    catch (e) {
-                        log.error(`Failed to fetch metadata for piece ${p.name}: ${e}`)
-                        return undefined
-                    }
-                }),
-        )
+            selectedPieces.map(async (p) => {
+                try {
+                    const metadata = await pieceMetadataService(log).get({
+                        name: p.name,
+                        version: p.version,
+                    });
+                    return metadata;
+                } catch (e) {
+                    log.error(`[ChatbotService] Failed to fetch metadata for piece ${p.name}: ${e}`);
+                    return undefined;
+                }
+            })
+        );
 
         const simplifiedPieces = fullPieces.filter(p => !isNil(p)).map(p => {
+            log.info(`[ChatbotService] RAG selected: ${p!.name}`);
             const mapInputProps = (items: Record<string, any>) => {
                 const result: Record<string, any> = {}
                 for (const [key, item] of Object.entries(items)) {
@@ -47,8 +98,8 @@ export const chatbotService = {
                                 description: prop.description,
                                 type: prop.type,
                                 required: !!prop.required,
-                            }
-                        ]))
+                            },
+                        ])),
                     }
                 }
                 return result
@@ -69,6 +120,7 @@ export const chatbotService = {
                 name: p!.name,
                 displayName: p!.displayName,
                 description: p!.description,
+                version: p!.version,
                 actions: mapInputProps(p!.actions),
                 triggers: mapInputProps(p!.triggers),
                 outputs: mapOutputFields(p!.actions),
@@ -94,7 +146,7 @@ CRITICAL GOAL: NO UNNECESSARY QUESTIONS
 ══════════════════════════════════════════════
 STRICT STRUCTURAL RULES
 ══════════════════════════════════════════════
-- Step types: EMPTY (trigger only), PIECE_TRIGGER, PIECE, LOOP_ON_ITEMS. No others.
+- Step types: EMPTY (trigger only), PIECE_TRIGGER, PIECE, LOOP_ON_ITEMS, BRANCH.
 - Every step/trigger MUST have "valid": true.
 - Gmail fields (receiver, cc, etc.) MUST be arrays: ["email@example.com"].
 - Google Sheets 'insert_row' values MUST be an object: {"Column Name": "Value"}.
@@ -104,12 +156,30 @@ STRICT STRUCTURAL RULES
 - Action variables: ALWAYS {{STEP_NAME.FIELD}}. (No 'steps.' prefix, no '.output' in the middle)
 - JSON values: Ensure all field values are valid JSON types.
 - After the final action, include a mandatory "publish" step (\`type":"PUBLISH"\`) with "valid": true to enable workflow activation.
-- Omit any optional piece input fields that are empty; do not include them in the JSON.
-- Set "valid": true only when all required fields are present and correctly formatted.
-- Gmail fields (receiver, cc, bcc) must always be arrays, even if a single email is provided.
-- Do not ask the user for IDs that can be generated by previous steps.
-- Array fields: piece input fields that expect a list of items (like Gmail receivers) MUST be an array: ["email@example.com"].
-- Object fields: piece input fields that expect key-value pairs (like Google Sheets values) MUST be an object: {"Col": "Val"}.
+- TRIGGER STRUCTURE: If the workflow starts with a piece (like Schedule, Gmail, Webhook), the top-level "trigger" MUST have "type": "PIECE_TRIGGER". 
+- NEVER put a "PIECE_TRIGGER" inside a "nextAction". 
+- "type": "EMPTY" should ONLY be used if there is no specific piece trigger applicable.
+- Omit any optional piece input fields that are empty, null, or undefined; do not include them in the JSON at all.
+
+══════════════════════════════════════════════
+CONTROL FLOW STRUCTURES (CRITICAL)
+══════════════════════════════════════════════
+- LOOP_ON_ITEMS: 
+  "type": "LOOP_ON_ITEMS",
+  "settings": { "items": "{{ expression_returning_array }}" },
+  "firstLoopAction": { ... first action inside loop ... },
+  "nextAction": { ... next action after loop finishes ... }
+
+- BRANCH:
+  "type": "BRANCH",
+  "settings": {
+    "conditions": [
+      [{ "operator": "TEXT_CONTAINS", "firstValue": "{{ val }}", "secondValue": "match" }]
+    ]
+  },
+  "onTrueNextAction": { ... action if condition is true ... },
+  "onFalseNextAction": { ... action if condition is false ... },
+  "nextAction": { ... action after branch branches converge ... }
 
 ══════════════════════════════════════════════
 AGENTIC WORKFLOWS & AI PIECES
@@ -334,8 +404,28 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
 
             // Auto-fix piece versions to prevent 400/404 errors due to LLM hallucinations
             if (flowJson && flowJson.trigger) {
+                // Fix nested triggers (LLM often puts a PIECE_TRIGGER inside an EMPTY trigger)
+                if (flowJson.trigger.type === 'EMPTY' && flowJson.trigger.nextAction?.type === 'PIECE_TRIGGER') {
+                    log.info('[ChatbotService#fixVersions] Promoting nested trigger to root')
+                    const nestedTrigger = flowJson.trigger.nextAction
+                    const oldNextAction = nestedTrigger.nextAction
+                    flowJson.trigger = {
+                        ...nestedTrigger,
+                        name: 'trigger',
+                        nextAction: oldNextAction,
+                    }
+                }
+
                 const fixVersions = (step: any, parent?: any, key?: string) => {
                     if (isNil(step)) return
+
+                    // Ensure every step has a valid name and displayName to avoid "stepName undefined" errors in builder
+                    if (isNil(step.name)) {
+                        step.name = key === 'trigger' ? 'trigger' : `step_${apId()}`
+                    }
+                    if (isNil(step.displayName)) {
+                        step.displayName = step.name
+                    }
                     
                     // Recursive helper to fix hallucinated mappings like {{steps.xxx.output.field}} -> {{steps.xxx.field}}
                     const fixMappings = (obj: any): any => {
@@ -427,32 +517,96 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                         const pieceName = step.settings.pieceName
                         if (pieceName) {
                             const normalizedName = pieceName.replace('@activepieces/piece-', '')
-                            const actualPiece = piecesSummary.find(p => 
-                                p.name === pieceName || 
-                                p.name === `@activepieces/piece-${normalizedName}` ||
-                                p.name.replace('@activepieces/piece-', '') === normalizedName,
-                            )
+                            const actualPiece = simplifiedPieces.find(
+                                (p) =>
+                                    p.name === pieceName ||
+                                    p.name === `@activepieces/piece-${normalizedName}` ||
+                                    p.name.replace('@activepieces/piece-', '') ===
+                                        normalizedName,
+                            );
                             if (actualPiece) {
-                                log.info({ pieceName, actualName: actualPiece.name }, '[ChatbotService#fixVersions] Piece found')
-                                step.settings.pieceName = actualPiece.name
-                                step.settings.pieceVersion = actualPiece.version
-                                
+                                log.info(
+                                    { pieceName, actualName: actualPiece.name },
+                                    '[ChatbotService#fixVersions] Piece found',
+                                );
+                                step.settings.pieceName = actualPiece.name;
+                                step.settings.pieceVersion =
+                                    (actualPiece as any).version ||
+                                    step.settings.pieceVersion;
+
                                 // Auto-fix for Gmail piece: convert email strings to arrays if necessary
-                                const isGmail = actualPiece.name === '@activepieces/piece-gmail' || actualPiece.name === 'gmail'
+                                const isGmail =
+                                    actualPiece.name === '@activepieces/piece-gmail' ||
+                                    actualPiece.name === 'gmail';
                                 if (isGmail) {
-                                    const arrayFields = ['receiver', 'cc', 'bcc', 'reply_to']
+                                    const arrayFields = ['receiver', 'cc', 'bcc', 'reply_to'];
                                     arrayFields.forEach((field) => {
-                                        const value = step.settings.input[field]
+                                        const value = step.settings.input[field];
                                         if (value && typeof value === 'string') {
-                                            log.info({ field, value }, '[ChatbotService#fixVersions] Coercing Gmail field to array')
-                                            let cleaned = value
-                                            if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
-                                                cleaned = cleaned.substring(1, cleaned.length - 1).replace(/['"]/g, '').trim()
+                                            log.info(
+                                                { field, value },
+                                                '[ChatbotService#fixVersions] Coercing Gmail field to array',
+                                            );
+                                            let cleaned = value;
+                                            if (
+                                                cleaned.startsWith('[') &&
+                                                cleaned.endsWith(']')
+                                            ) {
+                                                cleaned = cleaned
+                                                    .substring(1, cleaned.length - 1)
+                                                    .replace(/['"]/g, '')
+                                                    .trim();
                                             }
-                                            step.settings.input[field] = cleaned.includes('{{') ? [cleaned] : cleaned.split(',').map((e: string) => e.trim()).filter((e: string) => e.length > 0)
+                                            step.settings.input[field] = cleaned.includes(
+                                                '{{',
+                                            )
+                                                ? [cleaned]
+                                                : cleaned
+                                                      .split(',')
+                                                      .map((e: string) => e.trim())
+                                                      .filter((e: string) => e.length > 0);
                                         }
-                                    })
+                                    });
                                 }
+
+                                // Programmatically prune empty/null optional fields that cause UI validation errors
+                                // We keep required fields even if empty (to show errors) but remove optional ones
+                                const pieceActions: Record<string, any> =
+                                    actualPiece.actions || {};
+                                const pieceTriggers: Record<string, any> =
+                                    actualPiece.triggers || {};
+                                const actionMetadata =
+                                    pieceActions[step.settings.actionName] ||
+                                    pieceTriggers[step.settings.actionName];
+
+                                if (actionMetadata && actionMetadata.props) {
+                                    for (const [propKey, propValue] of Object.entries(
+                                        step.settings.input,
+                                    )) {
+                                        const propMetadata =
+                                            actionMetadata.props[propKey];
+                                        const isOptional =
+                                            propMetadata && !propMetadata.required;
+
+                                        const isEmpty =
+                                            isNil(propValue) ||
+                                            propValue === '' ||
+                                            (Array.isArray(propValue) &&
+                                                propValue.length === 0) ||
+                                            (typeof propValue === 'object' &&
+                                                Object.keys(propValue).length === 0);
+
+                                        if (isOptional && isEmpty) {
+                                            log.info(
+                                                { propKey, stepName: step.name },
+                                                '[ChatbotService#fixVersions] Pruning empty optional field',
+                                            );
+                                            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+                                            delete step.settings.input[propKey];
+                                        }
+                                    }
+                                }
+
                                 // Auto-fix for Google Sheets insert_row: values must be an object, not array
                                 const isSheets = actualPiece.name === '@activepieces/piece-google-sheets'
                                 if (isSheets && step.settings.actionName === 'insert_row' && Array.isArray(step.settings.input?.values)) {

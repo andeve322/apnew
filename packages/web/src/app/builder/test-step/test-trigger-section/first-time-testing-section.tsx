@@ -20,6 +20,7 @@ type FirstTimeTestingSectionProps = {
   onPollTrigger: () => void;
   onMcpToolTesting: () => void;
   onSaveMockAsSampleData: (mockData: unknown) => void;
+  isEmptyTrigger?: boolean;
 };
 
 export const FirstTimeTestingSection = ({
@@ -32,8 +33,37 @@ export const FirstTimeTestingSection = ({
   onPollTrigger,
   onMcpToolTesting,
   onSaveMockAsSampleData,
+  isEmptyTrigger = false,
 }: FirstTimeTestingSectionProps) => {
   const { isLoadingDynamicProperties } = useContext(DynamicPropertiesContext);
+
+  if (isEmptyTrigger) {
+    return (
+      <div className="flex justify-center flex-col gap-2 items-center">
+        <TestButtonTooltip saving={isSaving} invalid={!isValid}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onSaveMockAsSampleData({})}
+            keyboardShortcut="G"
+            onKeyboardShortcut={() => onSaveMockAsSampleData({})}
+            disabled={!isValid || isLoadingDynamicProperties}
+            loading={isSaving}
+            data-testid="use-empty-sample-data-button"
+          >
+            <Dot animation={true} variant={'primary'}></Dot>
+            {t('Use Empty Sample Data')}
+          </Button>
+        </TestButtonTooltip>
+
+        <p className="text-xs text-muted-foreground text-center px-4">
+          {t(
+            'Empty trigger: use empty {} to test your workflow with no initial data',
+          )}
+        </p>
+      </div>
+    );
+  }
   if (
     testType === 'simulation' ||
     testType === 'webhook' ||

@@ -42,6 +42,7 @@ import { McpOAuthClientEntity } from '../mcp/oauth/client/mcp-oauth-client.entit
 import { McpOAuthAuthorizationCodeEntity } from '../mcp/oauth/code/mcp-oauth-code.entity'
 import { McpOAuthTokenEntity } from '../mcp/oauth/token/mcp-oauth-token.entity'
 import { PieceMetadataEntity } from '../pieces/metadata/piece-metadata-entity'
+import { PieceRagChunkEntity } from '../pieces/rag/piece-rag-chunk.entity'
 import { PieceTagEntity } from '../pieces/tags/pieces/piece-tag.entity'
 import { TagEntity } from '../pieces/tags/tag-entity'
 import { PlatformEntity } from '../platform/platform.entity'
@@ -100,6 +101,7 @@ function getEntities(): EntitySchema<unknown>[] {
         McpOAuthTokenEntity,
         KnowledgeBaseFileEntity,
         KnowledgeBaseChunkEntity,
+        PieceRagChunkEntity,
         TriggerSourceEntity,
         UserBadgeEntity,
         WaitpointEntity,

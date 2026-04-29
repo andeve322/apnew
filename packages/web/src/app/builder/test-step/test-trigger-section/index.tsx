@@ -1,4 +1,9 @@
-import { FlowTrigger, flowStructureUtil, isNil } from '@activepieces/shared';
+import {
+  FlowTrigger,
+  FlowTriggerType,
+  flowStructureUtil,
+  isNil,
+} from '@activepieces/shared';
 import { t } from 'i18next';
 import React, { useRef, useState } from 'react';
 import { useFormContext } from 'react-hook-form';
@@ -27,15 +32,20 @@ type TestTriggerSectionProps = {
 
 const TestTriggerSection = React.memo(
   ({ isSaving, flowVersionId, flowId }: TestTriggerSectionProps) => {
-    const form = useFormContext<Pick<FlowTrigger, 'name' | 'settings'>>();
+    const form =
+      useFormContext<Pick<FlowTrigger, 'name' | 'settings' | 'type'>>();
     const formValues = form.getValues();
-    const isValid = form.formState.isValid;
+    const isEmptyTrigger = formValues.type === FlowTriggerType.EMPTY;
+
+    const isValid = isEmptyTrigger || form.formState.isValid;
     const abortControllerRef = useRef<AbortController>(new AbortController());
     const [isTestingDialogOpen, setIsTestingDialogOpen] = useState(false);
-    const { pieceModel, isLoading: isPieceLoading } = piecesHooks.usePiece({
-      name: formValues.settings.pieceName,
-      version: formValues.settings.pieceVersion,
-    });
+    const { pieceModel, isLoading: isPieceLoading } = isEmptyTrigger
+      ? { pieceModel: undefined, isLoading: false }
+      : piecesHooks.usePiece({
+          name: formValues.settings.pieceName,
+          version: formValues.settings.pieceVersion,
+        });
 
     const trigger = pieceModel?.triggers?.[formValues.settings.triggerName];
     const mockData =
@@ -99,14 +109,17 @@ const TestTriggerSection = React.memo(
     const isTestedBefore = !isNil(lastTestDate);
     const showFirstTimeTestingSection = !isTestedBefore && !isSimulating;
 
-    if (isPieceLoading || isNil(trigger)) {
+    if (!isEmptyTrigger && (isPieceLoading || isNil(trigger))) {
       return null;
     }
-    const testType: TestType = triggerEventUtils.getTestType({
-      triggerName: formValues.settings.triggerName,
-      pieceName: formValues.settings.pieceName,
-      trigger: trigger,
-    });
+
+    const testType: TestType = isEmptyTrigger
+      ? 'polling'
+      : triggerEventUtils.getTestType({
+          triggerName: formValues.settings.triggerName,
+          pieceName: formValues.settings.pieceName,
+          trigger: trigger!,
+        });
 
     const showSampleDataViewer =
       sampleDataSelected && !isSimulating && !isSavingMockdata;
@@ -180,6 +193,7 @@ const TestTriggerSection = React.memo(
             onPollTrigger={pollTrigger}
             onMcpToolTesting={() => setIsTestingDialogOpen(true)}
             onSaveMockAsSampleData={saveMockAsSampleData}
+            isEmptyTrigger={isEmptyTrigger}
           />
         )}
         {(!showFirstTimeTestingSection || errorMessage) && (
