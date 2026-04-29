@@ -17,7 +17,7 @@ export const chatbotService = {
 
         // Core pieces that are ALWAYS useful for any workflow
         const corePiecesNames = [
-            'gmail', 'google-sheets', 'schedule', 'http', 'ai', 'approval', 'utility', 'delay', 'ingv'
+            'gmail', 'google-sheets', 'schedule', 'ai', 'approval', 'utility', 'delay', 'ingv',
         ]
 
         const getRelevantPieces = (prompt: string, summary: any[]) => {
@@ -51,12 +51,13 @@ export const chatbotService = {
                     return await pieceMetadataService(log).get({
                         name: p.name,
                         version: p.version,
-                    });
-                } catch (e) {
-                    return undefined;
+                    })
                 }
-            })
-        );
+                catch (e) {
+                    return undefined
+                }
+            }),
+        )
 
         const simplifiedPieces = fullPieces.filter(p => !isNil(p)).map(p => {
             const mapProps = (props: Record<string, any>) => {
@@ -117,16 +118,27 @@ CONTROL FLOW STRUCTURES (CRITICAL)
   "firstLoopAction": { ... first action inside loop ... },
   "nextAction": { ... next action after loop finishes ... }
 
-- BRANCH:
-  "type": "BRANCH",
+- ROUTER:
+  "type": "ROUTER",
   "settings": {
-    "conditions": [
-      [{ "operator": "TEXT_CONTAINS", "firstValue": "{{ val }}", "secondValue": "match" }]
-    ]
+    "branches": [
+      {
+        "branchName": "Branch 1",
+        "branchType": "CONDITION",
+        // Conditions can be TEXT_CONTAINS, NUMBER_GREATER_THAN, BOOLEAN_IS_TRUE, EXISTS, etc.
+        "conditions": [[{ "operator": "TEXT_CONTAINS", "firstValue": "{{ val }}", "secondValue": "match" }]]
+      },
+      { "branchName": "Otherwise", "branchType": "FALLBACK" }
+    ],
+    "executionType": "EXECUTE_FIRST_MATCH"
   },
-  "onTrueNextAction": { ... action if condition is true ... },
-  "onFalseNextAction": { ... action if condition is false ... },
-  "nextAction": { ... action after branch branches converge ... }
+  "children": [
+    { ... action for branch 1 ... },
+    null
+  ],
+  "nextAction": { ... action after router branches converge ... }
+
+
 
 ══════════════════════════════════════════════
 AGENTIC WORKFLOWS & AI PIECES
@@ -396,7 +408,8 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                                 if ((k === 'agentTools' || k === 'tools') && obj[k] && !Array.isArray(obj[k])) {
                                     log.info({ key: k }, '[ChatbotService#fixMappings] Coercing tool to array')
                                     newObj['agentTools'] = [fixMappings(obj[k])]
-                                } else {
+                                }
+                                else {
                                     newObj[k] = fixMappings(obj[k])
                                 }
                             }
@@ -410,7 +423,7 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     Object.assign(step, fixedStep)
 
                     // Remove steps whose type is not a valid Activepieces action type.
-                    const validActionTypes = ['PIECE', 'PIECE_TRIGGER', 'LOOP_ON_ITEMS', 'BRANCH', 'EMPTY']
+                    const validActionTypes = ['PIECE', 'PIECE_TRIGGER', 'LOOP_ON_ITEMS', 'BRANCH', 'ROUTER', 'EMPTY']
                     if (!validActionTypes.includes(step.type)) {
                         if (parent && key) {
                             log.warn({ stepName: step.name, type: step.type }, '[ChatbotService#fixVersions] Removing step with invalid type')
@@ -448,210 +461,96 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     }
 
                     if (step.type === 'BRANCH') {
-                        // AI MISTAKE 1: sometimes puts onTrueNextAction/onFalseNextAction inside settings. Move them out.
-                        if (step.settings?.onTrueNextAction) {
-                            step.onTrueNextAction = step.settings.onTrueNextAction
-                            delete step.settings.onTrueNextAction
-                        }
-                        if (step.settings?.onFalseNextAction) {
-                            step.onFalseNextAction = step.settings.onFalseNextAction
-                            delete step.settings.onFalseNextAction
-                        }
-                        // Ensure onFalseNextAction exists even if null to satisfy schema
-                        if (isNil(step.onFalseNextAction)) {
-                            step.onFalseNextAction = null
-                        }
-                        if (isNil(step.onTrueNextAction)) {
-                            step.onTrueNextAction = null
-                        }
-
-                        // AI MISTAKE 2: Conditions must be an array of arrays (AND of ORs)
-                        if (step.settings?.conditions && Array.isArray(step.settings.conditions)) {
-                            if (step.settings.conditions.length > 0 && !Array.isArray(step.settings.conditions[0])) {
-                                log.info({ stepName: step.name }, '[ChatbotService#fixVersions] Wrapping BRANCH conditions in double array')
-                                step.settings.conditions = [step.settings.conditions]
+                        log.info({ stepName: step.name }, '[ChatbotService#fixVersions] Converting BRANCH to ROUTER')
+                        const onTrue = step.onTrueNextAction || step.settings?.onTrueNextAction || null
+                        const onFalse = step.onFalseNextAction || step.settings?.onFalseNextAction || null
+                        let conditions = step.settings?.conditions
+                        
+                        if (conditions && Array.isArray(conditions)) {
+                            if (conditions.length > 0 && !Array.isArray(conditions[0])) {
+                                conditions = [conditions]
                             }
                         }
-                        // BRANCH must have conditions in settings
-                        if (isNil(step.settings.conditions)) {
-                            step.settings.conditions = [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]]
+                        if (isNil(conditions)) {
+                            conditions = [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]]
+                        }
+                        
+                        step.type = 'ROUTER'
+                        step.settings = {
+                            branches: [
+                                { branchName: 'Branch 1', branchType: 'CONDITION', conditions },
+                                { branchName: 'Otherwise', branchType: 'FALLBACK' },
+                            ],
+                            executionType: 'EXECUTE_FIRST_MATCH',
+                        }
+                        step.children = [onTrue, onFalse]
+                        delete step.onTrueNextAction
+                        delete step.onFalseNextAction
+                    }
+
+
+                    if (step.type === 'ROUTER') {
+                        if (isNil(step.settings.branches)) {
+                            step.settings.branches = [
+                                { branchName: 'Branch 1', branchType: 'CONDITION', conditions: [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]] },
+                                { branchName: 'Otherwise', branchType: 'FALLBACK' },
+                            ]
+                        }
+                        if (isNil(step.settings.executionType)) {
+                            step.settings.executionType = 'EXECUTE_FIRST_MATCH'
+                        }
+                        if (isNil(step.children)) {
+                            step.children = step.settings.branches.map(() => null)
                         }
                     }
 
                     const isPieceStep = step.type === 'PIECE' || step.type === 'PIECE_TRIGGER'
                     if (isPieceStep) {
-                        // Ensure input exists
                         if (isNil(step.settings.input)) step.settings.input = {}
                         if (isNil(step.settings.propertySettings)) step.settings.propertySettings = {}
 
                         const pieceName = step.settings.pieceName
                         if (pieceName) {
                             const normalizedName = pieceName.replace('@activepieces/piece-', '').toLowerCase()
-                            // Search in FULL summary, not just RAG context
-                            const actualPiece = piecesSummary.find(
-                                (p) =>
-                                    p.name.toLowerCase() === pieceName.toLowerCase() ||
-                                    p.name.toLowerCase() === `@activepieces/piece-${normalizedName}` ||
-                                    p.name.replace('@activepieces/piece-', '').toLowerCase() === normalizedName,
-                            );
+                            const actualPiece = piecesSummary.find(p => 
+                                p.name.toLowerCase() === pieceName.toLowerCase() || 
+                                p.name.toLowerCase() === `@activepieces/piece-${normalizedName}` ||
+                                p.name.replace('@activepieces/piece-', '').toLowerCase() === normalizedName,
+                            )
+
                             if (actualPiece) {
-                                log.info(
-                                    { pieceName, actualName: actualPiece.name, version: actualPiece.version },
-                                    '[ChatbotService#fixVersions] Piece found in full DB',
-                                );
-                                step.settings.pieceName = actualPiece.name;
-                                step.settings.pieceVersion = actualPiece.version || step.settings.pieceVersion;
+                                step.settings.pieceName = actualPiece.name
+                                step.settings.pieceVersion = actualPiece.version || step.settings.pieceVersion
 
-                                // Fetch full metadata if needed for Gmail fixes or others
-                                const fullMetadata = await pieceMetadataService(log).get({
-                                    name: actualPiece.name,
-                                    version: actualPiece.version,
-                                }).catch(() => null);
-
-                                if (fullMetadata) {
-                                    // Gmail coercion logic
-                                    const isGmail = actualPiece.name === '@activepieces/piece-gmail' || actualPiece.name === 'gmail';
-                                    if (isGmail) {
-                                        const arrayFields = ['receiver', 'cc', 'bcc', 'reply_to'];
-                                        arrayFields.forEach((field) => {
-                                            const value = step.settings.input[field];
-                                            if (value && typeof value === 'string') {
-                                                log.info({ field, value }, '[ChatbotService#fixVersions] Coercing Gmail field to array');
-                                                let cleaned = value;
-                                                if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
-                                                    cleaned = cleaned.substring(1, cleaned.length - 1).replace(/['"]/g, '').trim();
-                                                }
-                                                step.settings.input[field] = cleaned.includes('{{') ? [cleaned] : cleaned.split(',').map((e: string) => e.trim()).filter((e: string) => e.length > 0);
-                                            }
-                                        });
-                                    }
-                                }
-                            }
-                        }
-tivepieces/piece-${normalizedName}` ||
-                                    p.name.replace('@activepieces/piece-', '') ===
-                                        normalizedName,
-                            );
-                            if (actualPiece) {
-                                log.info(
-                                    { pieceName, actualName: actualPiece.name },
-                                    '[ChatbotService#fixVersions] Piece found',
-                                );
-                                step.settings.pieceName = actualPiece.name;
-                                step.settings.pieceVersion =
-                                    (actualPiece as any).version ||
-                                    step.settings.pieceVersion;
-
-                                // Auto-fix for Gmail piece: convert email strings to arrays if necessary
-                                const isGmail =
-                                    actualPiece.name === '@activepieces/piece-gmail' ||
-                                    actualPiece.name === 'gmail';
-                                if (isGmail) {
-                                    const arrayFields = ['receiver', 'cc', 'bcc', 'reply_to'];
-                                    arrayFields.forEach((field) => {
-                                        const value = step.settings.input[field];
-                                        if (value && typeof value === 'string') {
-                                            log.info(
-                                                { field, value },
-                                                '[ChatbotService#fixVersions] Coercing Gmail field to array',
-                                            );
-                                            let cleaned = value;
-                                            if (
-                                                cleaned.startsWith('[') &&
-                                                cleaned.endsWith(']')
-                                            ) {
-                                                cleaned = cleaned
-                                                    .substring(1, cleaned.length - 1)
-                                                    .replace(/['"]/g, '')
-                                                    .trim();
-                                            }
-                                            step.settings.input[field] = cleaned.includes(
-                                                '{{',
-                                            )
-                                                ? [cleaned]
-                                                : cleaned
-                                                      .split(',')
-                                                      .map((e: string) => e.trim())
-                                                      .filter((e: string) => e.length > 0);
+                                // Gmail array coercion
+                                if (actualPiece.name === '@activepieces/piece-gmail' || actualPiece.name === 'gmail') {
+                                    ['receiver', 'cc', 'bcc', 'reply_to'].forEach(field => {
+                                        const val = step.settings.input[field]
+                                        if (val && typeof val === 'string') {
+                                            const cleaned = val.startsWith('[') && val.endsWith(']') ? val.slice(1, -1).replace(/['"]/g, '').trim() : val
+                                            step.settings.input[field] = cleaned.includes('{{') ? [cleaned] : cleaned.split(',').map(e => e.trim()).filter(e => e.length > 0)
                                         }
-                                    });
-                                }
-
-                                // Programmatically prune empty/null optional fields that cause UI validation errors
-                                // We keep required fields even if empty (to show errors) but remove optional ones
-                                const pieceActions: Record<string, any> =
-                                    actualPiece.actions || {};
-                                const pieceTriggers: Record<string, any> =
-                                    actualPiece.triggers || {};
-                                const actionMetadata =
-                                    pieceActions[step.settings.actionName] ||
-                                    pieceTriggers[step.settings.actionName];
-
-                                if (actionMetadata && actionMetadata.props) {
-                                    for (const [propKey, propValue] of Object.entries(
-                                        step.settings.input,
-                                    )) {
-                                        const propMetadata =
-                                            actionMetadata.props[propKey];
-                                        const isOptional =
-                                            propMetadata && !propMetadata.required;
-
-                                        const isEmpty =
-                                            isNil(propValue) ||
-                                            propValue === '' ||
-                                            (Array.isArray(propValue) &&
-                                                propValue.length === 0) ||
-                                            (typeof propValue === 'object' &&
-                                                Object.keys(propValue).length === 0);
-
-                                        if (isOptional && isEmpty) {
-                                            log.info(
-                                                { propKey, stepName: step.name },
-                                                '[ChatbotService#fixVersions] Pruning empty optional field',
-                                            );
-                                            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
-                                            delete step.settings.input[propKey];
-                                        }
-                                    }
-                                }
-
-                                // Auto-fix for Google Sheets insert_row: values must be an object, not array
-                                const isSheets = actualPiece.name === '@activepieces/piece-google-sheets'
-                                if (isSheets && step.settings.actionName === 'insert_row' && Array.isArray(step.settings.input?.values)) {
-                                    const headers: string[] = Array.isArray(step.settings.input.first_row_headers) ? step.settings.input.first_row_headers : []
-                                    const valuesObj: Record<string, string> = {}
-                                    ;(step.settings.input.values as string[]).forEach((v: string, i: number) => {
-                                        valuesObj[headers[i] || `Column${i + 1}`] = v
                                     })
-                                    log.info('[ChatbotService#fixVersions] Converted insert_row values from array to object')
-                                    step.settings.input.values = valuesObj
                                 }
                             }
-                            else {
-                                step.settings.pieceVersion = step.settings.pieceVersion || '0.0.1'
-                            }
-                        }
-                        else {
                             step.settings.pieceVersion = step.settings.pieceVersion || '0.0.1'
                         }
-                    }
 
-                    // 3. Recursive processing of child actions
-                    if (step.firstLoopAction) {
-                        fixVersions(step.firstLoopAction, step, 'firstLoopAction')
-                    }
-                    if (step.onTrueNextAction) {
-                        fixVersions(step.onTrueNextAction, step, 'onTrueNextAction')
-                    }
-                    if (step.onFalseNextAction) {
-                        fixVersions(step.onFalseNextAction, step, 'onFalseNextAction')
-                    }
-                    if (step.nextAction) {
-                        fixVersions(step.nextAction, step, 'nextAction')
+                        // 3. Recursive processing of child actions
+                        if (step.firstLoopAction) fixVersions(step.firstLoopAction)
+                        if (step.onTrueNextAction) fixVersions(step.onTrueNextAction)
+                        if (step.onFalseNextAction) fixVersions(step.onFalseNextAction)
+                        if (step.children) {
+                            step.children.forEach((child: any) => {
+                                if (child) fixVersions(child)
+                            })
+                        }
+                        if (step.nextAction) fixVersions(step.nextAction)
                     }
                 }
                 fixVersions(flowJson.trigger)
             }
+
 
             return {
                 reply,
