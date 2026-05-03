@@ -108,7 +108,10 @@ STRICT STRUCTURAL RULES
 - NEVER put a "PIECE_TRIGGER" inside a "nextAction". 
 - "type": "EMPTY" should ONLY be used if there is no specific piece trigger applicable.
 - Omit any optional piece input fields that are empty, null, or undefined; do not include them in the JSON at all.
-
+1. AI CLASSIFIER REQUIREMENT: Never use raw trigger data for geographic or semantic conditions in a ROUTER node. You must insert an AI node before the ROUTER. The AI prompt must evaluate the data and return a strict "Yes" or "No" output.
+2. ROUTER MAPPING: The ROUTER node must use the output of the preceding AI Classifier node for its condition, checking if the text matches "Yes".
+3. AI FORMATTER REQUIREMENT: Inside the true/positive branch of the ROUTER, before any messaging or email node, you must insert a second AI node. Instruct this AI to take the raw trigger variables and generate the final formatted content (e.g., professional HTML).
+4. DYNAMIC BODY MAPPING: The final messaging node (e.g., Gmail) must map its content/body field strictly to the output variable of the AI Formatter node. Do not hardcode HTML or plain text directly into the messaging node.
 ══════════════════════════════════════════════
 CONTROL FLOW STRUCTURES (CRITICAL)
 ══════════════════════════════════════════════
