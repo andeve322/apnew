@@ -143,14 +143,14 @@ async function pollAndExecute(apiClient: WorkerToApiContract, sbManager: Sandbox
     while (polling && connectionGeneration === generation) {
         const { data: machineInfo, error: machineError } = await tryCatch(buildMachineInfo)
         if (machineError) {
-            workerLog.error({ error: machineError }, 'Failed to build machine info')
+            workerLog.error({ err: machineError }, 'Failed to build machine info')
             await sleep(20000)
             continue
         }
 
         const { data: job, error: pollError } = await tryCatch(() => apiClient.poll(machineInfo))
         if (pollError) {
-            workerLog.error({ error: pollError }, 'Poll failed')
+            workerLog.error({ err: pollError }, 'Poll failed')
             await sleep(25000)
             continue
         }
@@ -192,7 +192,7 @@ async function pollAndExecute(apiClient: WorkerToApiContract, sbManager: Sandbox
         clearInterval(lockExtensionInterval)
 
         if (completeError) {
-            workerLog.error({ error: completeError, jobId: job.jobId }, 'Failed to complete job')
+            workerLog.error({ err: completeError, jobId: job.jobId }, 'Failed to complete job')
         }
     }
 }
@@ -224,7 +224,7 @@ async function executeJob(apiClient: WorkerToApiContract, job: ConsumeJobRequest
             log.debug({ handlerType: handler.jobType }, 'Executing job with handler')
             const { data: result, error } = await tryCatch(() => handler.execute(ctx, jobData))
             if (error) {
-                log.error({ error }, 'Job execution failed')
+                log.error({ err: error }, 'Job execution failed')
                 span.recordException(error)
                 throw error
             }
@@ -247,7 +247,7 @@ export function ensurePublicApiUrl(publicUrl: string): string {
 async function fetchAndStoreSettings(sock: Socket): Promise<void> {
     const { data: request, error } = await tryCatch(buildMachineInfo)
     if (error) {
-        logger.error({ error }, 'Failed to build machine info for settings fetch')
+        logger.error({ err: error }, 'Failed to build machine info for settings fetch')
         return
     }
     return new Promise<void>((resolve) => {
@@ -308,7 +308,7 @@ async function buildMachineInfo(): Promise<WorkerMachineHealthcheckRequest> {
 async function warmupPiecesOnStartup(apiClient: WorkerToApiContract): Promise<void> {
     const { data: pieces, error } = await tryCatch(() => apiClient.getUsedPieces({}))
     if (error) {
-        logger.error({ error }, 'Failed to fetch used pieces for warmup')
+        logger.error({ err: error }, 'Failed to fetch used pieces for warmup')
         return
     }
     if (!pieces || pieces.length === 0) {
@@ -320,7 +320,7 @@ async function warmupPiecesOnStartup(apiClient: WorkerToApiContract): Promise<vo
         pieceInstaller(logger, apiClient).install({ pieces, includeFilters: false }),
     )
     if (installError) {
-        logger.error({ error: installError }, 'Failed to install pieces during startup warmup')
+        logger.error({ err: installError }, 'Failed to install pieces during startup warmup')
     }
     else {
         void tryCatch(() => apiClient.markPieceAsUsed({ pieces }))

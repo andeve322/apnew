@@ -14,11 +14,15 @@ export class ActivepiecesError extends Error {
     }
 
     override toString(): string {
-        return JSON.stringify({
+        return JSON.stringify(this.toJSON())
+    }
+
+    toJSON() {
+        return {
             code: this.error.code,
             message: this.message,
             params: this.error.params,
-        })
+        }
     }
 }
 
