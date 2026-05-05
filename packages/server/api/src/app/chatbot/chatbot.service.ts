@@ -39,7 +39,7 @@ export const chatbotService = {
             return scored
                 .filter(s => s.score > 0)
                 .sort((a, b) => b.score - a.score)
-                .slice(0, 10) // TOP 10 ONLY
+                .slice(0, 25) // TOP 25 ONLY
                 .map(s => s.piece)
         }
 
@@ -103,17 +103,24 @@ STRICT STRUCTURAL RULES
 - Trigger variables: ALWAYS {{trigger.FIELD}}. (No 'steps.' prefix, no '.output' in the middle)
 - Action variables: ALWAYS {{STEP_NAME.FIELD}}. (No 'steps.' prefix, no '.output' in the middle)
 - JSON values: Ensure all field values are valid JSON types.
-- After the final action, include a mandatory "publish" step (\`type":"PUBLISH"\`) with "valid": true to enable workflow activation.
 - TRIGGER STRUCTURE: If the workflow starts with a piece (like Schedule, Gmail, Webhook), the top-level "trigger" MUST have "type": "PIECE_TRIGGER". 
 - NEVER put a "PIECE_TRIGGER" inside a "nextAction". 
 - "type": "EMPTY" should ONLY be used if there is no specific piece trigger applicable.
 - Omit any optional piece input fields that are empty, null, or undefined; do not include them in the JSON at all.
-1. AI CLASSIFIER REQUIREMENT: Never use raw trigger data for geographic or semantic conditions in a ROUTER node. You must insert an AI node before the ROUTER. The AI prompt must evaluate the data and return a strict "Yes" or "No" output.
-2. ROUTER MAPPING: The ROUTER node must use the output of the preceding AI Classifier node for its condition, checking if the text matches "Yes".
-3. AI FORMATTER REQUIREMENT: Inside the true/positive branch of the ROUTER, before any messaging or email node, you must insert a second AI node. Instruct this AI to take the raw trigger variables and generate the final formatted content (e.g., professional HTML).
-4. DYNAMIC BODY MAPPING: The final messaging node (e.g., Gmail) must map its content/body field strictly to the output variable of the AI Formatter node. Do not hardcode HTML or plain text directly into the messaging node.
+
 ══════════════════════════════════════════════
-CONTROL FLOW STRUCTURES (CRITICAL)
+AGENTIC WORKFLOWS & AI PIECES (CRITICAL)
+══════════════════════════════════════════════
+- For complex tasks requiring reasoning, semantic evaluation, or formatting, ALWAYS use the '@activepieces/piece-ai' piece.
+- AI CLASSIFIER PATTERN: Never use raw trigger data for geographic or semantic conditions in a ROUTER node. You MUST insert an AI node (@activepieces/piece-ai, action: classifyText) before the ROUTER. The AI must evaluate the data into categories (e.g., ["Yes", "No"]).
+- ROUTER MAPPING: The ROUTER node must use the output of the preceding AI Classifier node, checking if the result matches "Yes".
+- AI FORMATTER PATTERN: Inside the "Yes" branch, before any messaging node (Gmail, Slack), insert a second AI node (@activepieces/piece-ai, action: askAi). Instruct it to take the raw trigger variables and generate the final formatted content (e.g., professional HTML).
+- DYNAMIC BODY MAPPING: Final messaging nodes must map their content field strictly to the output of the AI Formatter node.
+- AGENT TOOLS: For tasks requiring multiple tools, use 'run_agent' with 'agentTools' array (each tool: {"type": "PIECE", "toolName": "@activepieces/piece-xxx"}).
+- AI PIECE CONFIGURATION: When using '@activepieces/piece-ai', ALWAYS include "provider" and "model" in the input. Use empty strings ("") if you don't know the values. This allows the user to select them manually in the builder.
+
+══════════════════════════════════════════════
+CONTROL FLOW STRUCTURES
 ══════════════════════════════════════════════
 - LOOP_ON_ITEMS: 
   "type": "LOOP_ON_ITEMS",
@@ -128,7 +135,6 @@ CONTROL FLOW STRUCTURES (CRITICAL)
       {
         "branchName": "Branch 1",
         "branchType": "CONDITION",
-        // Conditions can be TEXT_CONTAINS, NUMBER_GREATER_THAN, BOOLEAN_IS_TRUE, EXISTS, etc.
         "conditions": [[{ "operator": "TEXT_CONTAINS", "firstValue": "{{ val }}", "secondValue": "match" }]]
       },
       { "branchName": "Otherwise", "branchType": "FALLBACK" }
@@ -140,22 +146,6 @@ CONTROL FLOW STRUCTURES (CRITICAL)
     null
   ],
   "nextAction": { ... action after router branches converge ... }
-
-
-
-══════════════════════════════════════════════
-AGENTIC WORKFLOWS & AI PIECES
-══════════════════════════════════════════════
-- For complex tasks requiring reasoning or multiple tools, use the '@activepieces/piece-ai' piece with the 'run_agent' action.
-- 'run_agent' takes a 'prompt' and 'agentTools'.
-- 'agentTools' is an array where each tool object MUST have:
-  - "type": "PIECE"
-  - "toolName": (the name of the piece to use as a tool, e.g., "@activepieces/piece-google-sheets")
-- Example 'run_agent' tool: {"type": "PIECE", "toolName": "@activepieces/piece-slack"}
-- Use 'run_agent' when the user wants an "AI Assistant", "Agent", or complex decision-making.
-
-AVAILABLE PIECES:
-${JSON.stringify(simplifiedPieces)}
 
 ══════════════════════════════════════════════
 EXAMPLE 1 — Simple: Send email (EMPTY trigger)
@@ -237,6 +227,94 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
             }
           }
         }
+      }
+    }
+  }
+}
+\`\`\`
+
+══════════════════════════════════════════════
+EXAMPLE 3 — Agentic: Earthquake in Puglia -> AI Filter -> AI Format -> Gmail
+══════════════════════════════════════════════
+Planning:
+  Step 1: Trigger (INGV - New Earthquake)
+  Step 2: AI Classifier (piece-ai, askAi) -> "Verifica se la località {{trigger.place}} è in Puglia? Rispondi solo si o no."
+  Step 3: ROUTER -> Branch 1: {{step_2}} exactly matches "si" (case-insensitive).
+  Step 4: (Inside Branch 1) AI Formatter (piece-ai, askAi) -> "Scrivi mail HTML con i dettagli del sisma: {{trigger.magnitude}}, {{trigger.place}}."
+  Step 5: (Inside Branch 1) Gmail -> body: {{step_4}}, body_type: "html"
+
+\`\`\`json
+{
+  "displayName": "Allerta Terremoto Puglia",
+  "trigger": {
+    "name": "trigger",
+    "type": "PIECE_TRIGGER",
+    "valid": true,
+    "settings": {
+      "pieceName": "@activepieces/piece-ingv",
+      "triggerName": "new_earthquake",
+      "input": { "minMagnitude": "0.5" }
+    },
+    "nextAction": {
+      "name": "classifier",
+      "type": "PIECE",
+      "valid": true,
+      "settings": {
+        "pieceName": "@activepieces/piece-ai",
+        "actionName": "askAi",
+        "input": {
+          "provider": "",
+          "model": "",
+          "prompt": "Verifica se la località {{trigger.place}} si trova in Puglia? rispondi esclusivamente con si o no. "
+        }
+      },
+      "nextAction": {
+        "name": "router",
+        "type": "ROUTER",
+        "valid": true,
+        "settings": {
+          "branches": [
+            {
+              "branchName": "Puglia",
+              "branchType": "CONDITION",
+              "conditions": [[{ "operator": "TEXT_EXACTLY_MATCHES", "firstValue": "{{classifier}}", "secondValue": "si", "caseSensitive": false }]]
+            },
+            { "branchName": "Otherwise", "branchType": "FALLBACK" }
+          ],
+          "executionType": "EXECUTE_FIRST_MATCH"
+        },
+        "children": [
+          {
+            "name": "formatter",
+            "type": "PIECE",
+            "valid": true,
+            "settings": {
+              "pieceName": "@activepieces/piece-ai",
+              "actionName": "askAi",
+              "input": {
+                "provider": "",
+                "model": "",
+                "prompt": "Scrivi un breve corpo di mail HTML riguardo ad un terremoto avvenuto in Puglia e formatta i seguenti dati in modo facile da leggere: {{trigger.magnitude}}, {{trigger.place}}, {{trigger.time}}, {{trigger.depth_km}}."
+              }
+            },
+            "nextAction": {
+              "name": "send_email",
+              "type": "PIECE",
+              "valid": true,
+              "settings": {
+                "pieceName": "@activepieces/piece-gmail",
+                "actionName": "send_email",
+                "input": {
+                  "subject": "Allerta terremoto Puglia",
+                  "receiver": ["andrea.maccariello@gmail.com"],
+                  "body": "{{formatter}}",
+                  "body_type": "html"
+                }
+              }
+            }
+          },
+          null
+        ]
       }
     }
   }
@@ -378,7 +456,7 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     }
                 }
 
-                const fixVersions = (step: any, parent?: any, key?: string) => {
+                const fixVersions = (step: any, parent?: any, key?: string): void => {
                     if (isNil(step)) return
 
                     // Ensure every step has a valid name and displayName to avoid "stepName undefined" errors in builder
@@ -438,6 +516,15 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                     // 1. Common initialization for ALL steps
                     if (isNil(step.settings)) step.settings = {}
                     step.valid = true
+
+                    // AI Piece safety: if provider/model are missing, the step MUST be invalid to force user setup
+                    if (step.settings?.pieceName === '@activepieces/piece-ai' || step.settings?.pieceName === 'ai') {
+                        const input = step.settings?.input || {}
+                        if (isNil(input.provider) || input.provider === '' || isNil(input.model) || input.model === '') {
+                            log.info({ stepName: step.name }, '[ChatbotService#fixVersions] Marking AI step invalid due to missing provider/model')
+                            step.valid = false
+                        }
+                    }
                     if (isNil(step.displayName)) {
                         step.displayName = step.name.split('_').map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)).join(' ')
                     }
@@ -474,14 +561,11 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                                 conditions = [conditions]
                             }
                         }
-                        if (isNil(conditions)) {
-                            conditions = [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]]
-                        }
                         
                         step.type = 'ROUTER'
                         step.settings = {
                             branches: [
-                                { branchName: 'Branch 1', branchType: 'CONDITION', conditions },
+                                { branchName: 'Branch 1', branchType: 'CONDITION', conditions: conditions || [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]] },
                                 { branchName: 'Otherwise', branchType: 'FALLBACK' },
                             ],
                             executionType: 'EXECUTE_FIRST_MATCH',
@@ -493,11 +577,19 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
 
 
                     if (step.type === 'ROUTER') {
-                        if (isNil(step.settings.branches)) {
+                        if (isNil(step.settings.branches) || step.settings.branches.length === 0) {
                             step.settings.branches = [
                                 { branchName: 'Branch 1', branchType: 'CONDITION', conditions: [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]] },
                                 { branchName: 'Otherwise', branchType: 'FALLBACK' },
                             ]
+                        }
+                        else {
+                            // Ensure each branch has conditions if it's type CONDITION
+                            step.settings.branches.forEach((branch: Record<string, unknown>) => {
+                                if (branch.branchType === 'CONDITION' && isNil(branch.conditions)) {
+                                    branch.conditions = [[{ operator: 'EXISTS', firstValue: '', secondValue: '' }]]
+                                }
+                            })
                         }
                         if (isNil(step.settings.executionType)) {
                             step.settings.executionType = 'EXECUTE_FIRST_MATCH'
@@ -505,6 +597,10 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                         if (isNil(step.children)) {
                             step.children = step.settings.branches.map(() => null)
                         }
+                    }
+
+                    if (step.type === 'PUBLISH') {
+                        return
                     }
 
                     const isPieceStep = step.type === 'PIECE' || step.type === 'PIECE_TRIGGER'
@@ -538,18 +634,18 @@ KEY RULE: spreadsheetId and worksheetId come from previous steps. Use {{crea_fog
                             }
                             step.settings.pieceVersion = step.settings.pieceVersion || '0.0.1'
                         }
-
-                        // 3. Recursive processing of child actions
-                        if (step.firstLoopAction) fixVersions(step.firstLoopAction)
-                        if (step.onTrueNextAction) fixVersions(step.onTrueNextAction)
-                        if (step.onFalseNextAction) fixVersions(step.onFalseNextAction)
-                        if (step.children) {
-                            step.children.forEach((child: any) => {
-                                if (child) fixVersions(child)
-                            })
-                        }
-                        if (step.nextAction) fixVersions(step.nextAction)
                     }
+
+                    // 3. Recursive processing of child actions
+                    if (step.firstLoopAction) fixVersions(step.firstLoopAction, step, 'firstLoopAction')
+                    if (step.onTrueNextAction) fixVersions(step.onTrueNextAction, step, 'onTrueNextAction')
+                    if (step.onFalseNextAction) fixVersions(step.onFalseNextAction, step, 'onFalseNextAction')
+                    if (step.children) {
+                        step.children.forEach((child: any, idx: number) => {
+                            if (child) fixVersions(child, step.children, idx.toString())
+                        })
+                    }
+                    if (step.nextAction) fixVersions(step.nextAction, step, 'nextAction')
                 }
                 fixVersions(flowJson.trigger)
             }

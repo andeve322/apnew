@@ -8,7 +8,20 @@ import { RequestFilteringHttpAgent, RequestFilteringHttpsAgent } from 'request-f
 function parseAllowListFromEnv(): string[] {
     const raw = process.env['AP_SSRF_ALLOW_LIST']
     if (!raw) return []
-    return raw.split(',').map((s) => s.trim()).filter(Boolean)
+    return raw.split(',').map((s) => {
+        const trimmed = s.trim()
+        if (trimmed.toLowerCase() === 'localhost') {
+            return ['127.0.0.1/32', '::1/128']
+        }
+        // If it's a raw IP without CIDR, append /32 or /128
+        if (trimmed.includes('.') && !trimmed.includes('/')) {
+            return `${trimmed}/32`
+        }
+        if (trimmed.includes(':') && !trimmed.includes('/')) {
+            return `${trimmed}/128`
+        }
+        return trimmed
+    }).flat().filter(Boolean)
 }
 
 function buildAgents({ allowList, httpsAgentOptions }: BuildAgentsParams): SsrfAgents {
