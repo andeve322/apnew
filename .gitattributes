@@ -1,0 +1,13 @@
+# Handle line endings automatically for files detected as text 
+# and leave binary files untouched.
+* text=auto
+
+# Explicitly declare text files to always be normalized to LF on check-in.
+*.js text eol=lf
+*.py text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+
+# Denote files that should always have CRLF (if specifically required for Windows tools)
+*.bat text eol=crlf
